@@ -3,14 +3,10 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/types.h>
-#include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include <signal.h>
-#include <setjmp.h>
 
 #define MAX_COMMAND_SZ 256
-#define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
 
 typedef struct History {
     pid_t pid;
@@ -140,45 +136,43 @@ void handleCommand(char command[MAX_COMMAND_SZ]) {
     int len = strlen(command);
     if (command[len - 1] == '&' && command[len - 2] == ' ') {
         background = 1;
+        int idxToDel = len - 1;
+        memmove(&command[idxToDel], &command[idxToDel + 1], strlen(command) - idxToDel);
+        idxToDel = len - 2;
+        memmove(&command[idxToDel], &command[idxToDel + 1], strlen(command) - idxToDel);
+        len -= 2;
     }
 
     if ((pid = fork()) < 0) {
         printf("fork error\n");
-    } else if (pid == 0) {
-        if (background) {
-            while (1) {
-                sleep(10);
-                exit(0);
-            }
-        } else { // foreground
-            char tempCommand[MAX_COMMAND_SZ];
+    } else if (pid == 0) { // here the child process will "go"
+        char tempCommand[MAX_COMMAND_SZ];
+        strcpy(tempCommand, command);
+        char **commandToExec = str_split(tempCommand, ' '); // splitting words of the command to array of strings
+        if (strcmp(commandToExec[0], "echo") == 0) { // we want to get rid of quotes
             strcpy(tempCommand, command);
-            char **commandToExec = str_split(tempCommand, ' '); // splitting words of the command to array of strings
-            if (strcmp(commandToExec[0], "echo") == 0) { // we want to get rid of quotes
-                strcpy(tempCommand, command);
-                int j, i;
-                for (j = 0; j < 5; j++) {
-                    for (i = 1; i < len; i++) {
-                        tempCommand[i - 1] = tempCommand[i];
-                    }
-                    int idxToDel = len - 1;
-                    memmove(&tempCommand[idxToDel], &tempCommand[idxToDel + 1], strlen(tempCommand) - idxToDel);
-                    len--;
+            int j, i;
+            for (j = 0; j < 5; j++) {
+                for (i = 1; i < len; i++) {
+                    tempCommand[i - 1] = tempCommand[i];
                 }
+                int idxToDel = len - 1;
+                memmove(&tempCommand[idxToDel], &tempCommand[idxToDel + 1], strlen(tempCommand) - idxToDel);
+                len--;
+            }
 
-                char *new_str = malloc(strlen("echo ") + strlen(removeQuotes(tempCommand)) + 1);
-                new_str[0] = '\0';   // ensures the memory is an empty string
-                strcat(new_str, "echo ");
-                strcat(new_str, removeQuotes(tempCommand));
-                commandToExec = str_split(new_str, ' ');
-            }
-            if (execvp(commandToExec[0], commandToExec) == -1) {
-                fprintf(stderr, "Error in system call\n");
-            }
-            freeTokens(commandToExec);
-            exit(0);
+            char *new_str = malloc(strlen("echo ") + strlen(removeQuotes(tempCommand)) + 1);
+            new_str[0] = '\0';   // ensures the memory is an empty string
+            strcat(new_str, "echo ");
+            strcat(new_str, removeQuotes(tempCommand));
+            commandToExec = str_split(new_str, ' ');
         }
-    } else { // pid > 0
+        if (execvp(commandToExec[0], commandToExec) == -1) {
+            fprintf(stderr, "Error in system call\n");
+        }
+        freeTokens(commandToExec);
+        exit(0);
+    } else { // here the parent process will "go"
         addHistory(command, pid, background);
         printf("%d\n", pid);
         if (!background) { // don't wait for background to finish
