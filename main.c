@@ -10,11 +10,11 @@
 #include <setjmp.h>
 
 #define MAX_COMMAND_SZ 256
+#define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
 
 typedef struct History {
     pid_t pid;
     char command[100];
-    int background;
 } History;
 
 
@@ -28,23 +28,13 @@ void addHistory(char command[256], __pid_t pid, int background);
 
 void print(int historyOrJobs);
 
-void printHistory();
-
-void printJobs();
-
 History history[100];
 int historyCount = 0;
 
-char *concat(const char *s1, const char *s2) {
-    char *result = malloc(strlen(s1) + strlen(s2) + 1); // +1 for the null-terminator
-    // in real code you would check for errors in malloc here
-    strcpy(result, s1);
-    strcat(result, s2);
-    return result;
-}
-
 int main() {
     char command[MAX_COMMAND_SZ];
+    char prevPath[200];
+    getcwd(prevPath, 200); // initialize prevPath
     while (1) {
         printf("> ");
         fgets(command, MAX_COMMAND_SZ, stdin);
@@ -61,46 +51,45 @@ int main() {
             print(0);
             // printJobs();
         } else if (command[0] == 'c' && command[1] == 'd' && command[2] == ' ') {
+            char currentPath[200];
+            getcwd(currentPath, 200); // save currentPath
             addHistory(command, getpid(), 0);
-            printf("%d", getpid());
-            printf("handleCD\n");
+            printf("%d\n", getpid());
+            char **commandToExec = str_split(command, ' ');
+            int i = 0;
+            while (*(commandToExec + i)) { // counting words in the command
+                i++;
+            }
+            if (i > 2) { // if more than 2, illegal
+                fprintf(stderr, "Error: Too many arguments\n");
+            } else { // legal
+                char *wordAfterCD = commandToExec[1];
+                if (strlen(wordAfterCD) >= 2 && wordAfterCD[0] == '.' && wordAfterCD[1] == '.') {
+                    getcwd(prevPath, 200); // save prevPath
+                    chdir(wordAfterCD);
+                } else if (strcmp(wordAfterCD, "-") == 0) {
+                    chdir(prevPath);
+                    strcpy(prevPath, currentPath); // save prevPath
+                } else if (strcmp(wordAfterCD, "~") == 0) {
+                    getcwd(prevPath, 200); // save prevPath
+                    chdir(getenv("HOME"));
+                } else {
+                    int ret;
+                    getcwd(prevPath, 200); // save prevPath
+                    ret = chdir(wordAfterCD);
+                    if (ret == -1) {
+                        fprintf(stderr, "Error: No such file of directory\n");
+                    }
+                }
+                printf("%s\n", getcwd(currentPath, 200));
+            }
+
         } else {
             handleCommand(command);
         }
     }
 }
 
-void printJobs() {
-    int i = 0, status, running = 0;
-    for (i = 0; i < historyCount; i++) {
-        char statusString[10] = "DONE";
-        if ((waitpid(history[i].pid, &status, WNOHANG) == 0)
-            // ||  (i == historyCount - 1 && strcmp(history[i].command, "history") == 0)
-                ) {
-            printf("wierd\n");
-            strcpy(statusString, "RUNNING");
-            running = 1;
-        }
-        if (running) {
-            strcpy(statusString, "");
-            printf("%d %s %s\n", history[i].pid, history[i].command, statusString);
-            running = 0;
-        }
-    }
-}
-
-void printHistory() {
-    int i = 0, status, running = 0;
-    for (i = 0; i < historyCount; i++) {
-        char statusString[10] = "DONE";
-        if ((waitpid(history[i].pid, &status, WNOHANG) == 0)
-            || (i == historyCount - 1 && strcmp(history[i].command, "history") == 0)
-                ) {
-            strcpy(statusString, "RUNNING");
-        }
-        printf("%d %s %s\n", history[i].pid, history[i].command, statusString);
-    }
-}
 
 // historyOrJobs - 1 for history, 0 for jobs
 void print(int historyOrJobs) {
@@ -125,9 +114,24 @@ void print(int historyOrJobs) {
 
 void addHistory(char command[256], __pid_t pid, int background) {
     history[historyCount].pid = pid;
-    history[historyCount].background = background;
     strcpy(history[historyCount].command, command);
     historyCount++;
+}
+
+char *removeQuotes(char *line) {
+    int j = 0, i = 0;
+    for (i = 0; i < strlen(line); i++) {
+        if (line[i] != '"' && line[i] != '\\') {
+            line[j++] = line[i];
+        } else if (line[i + 1] == '"' && line[i] == '\\') {
+            line[j++] = '"';
+        } else if (line[i + 1] != '"' && line[i] == '\\') {
+            line[j++] = '\\';
+        }
+    }
+
+    if (j > 0) line[j] = 0;
+    return line;
 }
 
 void handleCommand(char command[MAX_COMMAND_SZ]) {
@@ -147,20 +151,29 @@ void handleCommand(char command[MAX_COMMAND_SZ]) {
                 exit(0);
             }
         } else { // foreground
-            // spliting words of the command to array of strings
-            char **commandToExec = str_split(command, ' ');
-
-            /*
-             *             if (commandToExec) { // print the splitted  command
-                int i;
-                for (i = 0; *(commandToExec + i); i++) {
-                    printf("command[%d] = %s | ", i, *(commandToExec + i));
+            char tempCommand[MAX_COMMAND_SZ];
+            strcpy(tempCommand, command);
+            char **commandToExec = str_split(tempCommand, ' '); // splitting words of the command to array of strings
+            if (strcmp(commandToExec[0], "echo") == 0) { // we want to get rid of quotes
+                strcpy(tempCommand, command);
+                int j, i;
+                for (j = 0; j < 5; j++) {
+                    for (i = 1; i < len; i++) {
+                        tempCommand[i - 1] = tempCommand[i];
+                    }
+                    int idxToDel = len - 1;
+                    memmove(&tempCommand[idxToDel], &tempCommand[idxToDel + 1], strlen(tempCommand) - idxToDel);
+                    len--;
                 }
-                printf("\n");
+
+                char *new_str = malloc(strlen("echo ") + strlen(removeQuotes(tempCommand)) + 1);
+                new_str[0] = '\0';   // ensures the memory is an empty string
+                strcat(new_str, "echo ");
+                strcat(new_str, removeQuotes(tempCommand));
+                commandToExec = str_split(new_str, ' ');
             }
-             * */
-            if (execvp(commandToExec[0], commandToExec) == -1){
-                printf("error in execvp\n");
+            if (execvp(commandToExec[0], commandToExec) == -1) {
+                fprintf(stderr, "Error in system call\n");
             }
             freeTokens(commandToExec);
             exit(0);
