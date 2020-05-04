@@ -1,3 +1,6 @@
+// name: Roy Waldman
+// submit nickname: waldmar
+// id: 312543630
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
